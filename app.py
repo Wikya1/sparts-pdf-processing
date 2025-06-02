@@ -23,7 +23,7 @@ if uploaded_pdf and uploaded_excel:
     price_map = dict(zip(price_df["Article"], price_df["Prix510"]))
 
     article_code_pattern = re.compile(r'\b\d{6,7}\b')
-    price_pattern = re.compile(r'(\d{1,4},\d{2})\s*/pce', re.IGNORECASE)
+    price_pattern = re.compile(r'(\d{1,4},\d{2})\s*/(?:pce|m)', re.IGNORECASE)
     valid_context_pattern = re.compile(r'(DIN\s+(gauche|droite)|/pce|•|€|N°\s*d[’\'`]art)', re.IGNORECASE)
 
     updates_per_page = {}
