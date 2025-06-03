@@ -109,7 +109,7 @@ if pdf_file and excel_file:
                     # Estimate Y-position of line
                     line_y0 = None
                     for w in words:
-                        if code in w.get('text', '') or (is_werk and 'WERK' in w.get('text', '').upper()):
+                        if code in w.get('text', '') or (is_werk and ('WERK' in w.get('text', '').upper() or 'ERSHT' in w.get('text', '').upper())):
                             line_y0 = w['top']
                             break
 
