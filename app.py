@@ -26,7 +26,7 @@ if pdf_file and excel_file:
 
         article_code_pattern = re.compile(r'\b\d{6,7}\b')
         price_pattern = re.compile(r'(\d{1,4},\d{2})\s*/(?:pce|m)', re.IGNORECASE) 
-        valid_context_pattern = re.compile(r'(DIN\s+(gauche|droite)|/pce|•|€|N°\s*d[’\'`]art|WERK)', re.IGNORECASE)
+        valid_context_pattern = re.compile(r'(DIN\s+(gauche|droite)|/pce|•|€|N°\s*d[’\'`]art|WERK|ERSHT)', re.IGNORECASE)
 
         updates_per_page = {}
         error_log = []
@@ -171,12 +171,16 @@ if pdf_file and excel_file:
         st.success("✅ Price update complete!")
 
         # Step 5: Download + error log
-        st.download_button(
-            label="📥 Download updated PDF",
-            data=output_buffer,
-            file_name="updated_catalog.pdf",
-            mime="application/pdf"
-        )
+        @st.fragment
+        def download_fragment():
+            st.download_button(
+                label="📥 Download updated PDF",
+                data=output_buffer,
+                file_name="updated_catalog.pdf",
+                mime="application/pdf"
+            )
+        
+        download_fragment()
 
         if error_log:
             st.warning(f"⚠️ {len(error_log)} issues found.")
