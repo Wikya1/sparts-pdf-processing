@@ -13,7 +13,7 @@ st.write("Upload a PDF catalog and an Excel file of prices to update prices in t
 
 pdf_file = st.file_uploader("Upload PDF catalog", type=["pdf"])
 excel_file = st.file_uploader("Upload Excel price list", type=["xlsx"])
-werk_multiplier = st.number_input("WERK price multiplier", min_value=0.01, max_value=10.0, value=1.2, step=0.01)
+special_multiplier = st.number_input("Werk/Ersht price multiplier", min_value=0.01, max_value=10.0, value=1.2, step=0.01)
 
 if pdf_file and excel_file:
     with st.spinner("Processing..."):
@@ -25,21 +25,43 @@ if pdf_file and excel_file:
         price_map = dict(zip(price_df["Article"], price_df["Prix510"]))
 
         article_code_pattern = re.compile(r'\b\d{6,7}\b')
-        price_pattern = re.compile(r'(\d{1,4},\d{2})\s*/(?:pce|m)', re.IGNORECASE) 
-        valid_context_pattern = re.compile(r'(DIN\s+(gauche|droite)|/pce|•|€|N°\s*d[’\'`]art|WERK|ERSHT)', re.IGNORECASE)
+        price_pattern = re.compile(r'(\d{1,4},\d{2})\s*/(?:pce|pcs|m)', re.IGNORECASE) 
+        valid_context_pattern = re.compile(r'(DIN\s+(gauche|droite)|/pce|•|€|N°\s*d[’\'`]art|WERK|ERSHT|SPECIAL|/m|/pcs)', re.IGNORECASE)
 
         updates_per_page = {}
         error_log = []
 
-        def find_price_box_near_line(price_str, words, line_y0, tolerance=2):
+        def find_price_box_near_line(price_str, words, line_y0, line_x0=None):
+            potential_matches = []
+            price_str_clean = price_str.replace(" ", "")
+            
             for w in words:
                 if not w.get('text'):
                     continue
-                word_text = w['text'].replace(" ", "")
-                if word_text.startswith(price_str):
-                    if abs(w['top'] - line_y0) <= tolerance:
-                        return w
-            return None
+                
+                word_text_clean = w['text'].replace(" ", "")
+                
+                # More flexible matching: allow price to appear anywhere in the word
+                if price_str_clean in word_text_clean:
+                    vertical_dist = abs(w['top'] - line_y0)
+                    
+                    # Calculate horizontal proximity if we have reference point
+                    horizontal_dist = abs(w['x0'] - line_x0) if line_x0 else 0
+                    
+                    # Weight vertical distance more than horizontal
+                    score = vertical_dist + (horizontal_dist * 0.1)
+                    
+                    # Include all candidates but prioritize closer ones
+                    potential_matches.append((score, w))
+            
+            if not potential_matches:
+                return None
+                    
+            # Sort matches by distance and return the closest one
+            potential_matches.sort(key=lambda x: x[0])
+            return potential_matches[0][1]
+        
+
 
         # Step 2: Read PDF and collect updates
         with pdfplumber.open(pdf_file) as pdf:
@@ -53,21 +75,20 @@ if pdf_file and excel_file:
                         continue
 
                     code_match = article_code_pattern.search(line)
-                    is_werk = "WERK" in line.upper() or "ERSHT" in line.upper()
+                    is_special = "WERK" in line.upper() or "ERSHT" in line.upper()
 
                     if code_match:
                         code = code_match.group()
                         expected_price = price_map.get(code)
-                    elif is_werk:
-                        code = "WERK"
+                    elif is_special:
+                        code = "SPECIAL"
                         expected_price = None
                     else:
                         continue
 
                     # Find price on current or next line
                     price_match = price_pattern.search(line)
-                    if not price_match and line_index + 1 < len(lines):
-                        price_match = price_pattern.search(lines[line_index + 1])
+
                     if not price_match:
                         error_log.append({
                             "Page": i + 1,
@@ -80,17 +101,25 @@ if pdf_file and excel_file:
 
                     actual_price = price_match.group(1)
 
-                    # Compute new price
-                    if is_werk:
+                    if is_special:
                         try:
-                            numeric_price = float(actual_price.replace(',', '.'))
-                            new_price = f"{round(numeric_price * werk_multiplier)}".replace('.', ',')
-                        except:
+                            clean_price = actual_price.replace(',', '.').replace(' ', '')
+                            if '/' in clean_price:
+                                clean_price = clean_price.split('/')[0]
+                            numeric_price = float(clean_price)
+                            calculated_price = round(numeric_price * special_multiplier, 2)
+                            
+                            # Format as string with comma as decimal separator
+                            # Ensure we always have 2 decimal places
+                            formatted_price = f"{calculated_price:.2f}".replace('.', ',')
+                            new_price = formatted_price
+                            
+                        except Exception as e:
                             error_log.append({
                                 "Page": i + 1,
                                 "Article Code": code,
-                                "Expected Price": f"WERK x {werk_multiplier}",
-                                "Error Type": "Invalid price format for WERK",
+                                "Expected Price": f"WERK x {special_multiplier}",
+                                "Error Type": f"Price conversion error: {str(e)}",
                                 "Context": line
                             })
                             continue
@@ -109,10 +138,15 @@ if pdf_file and excel_file:
                     # Estimate Y-position of line
                     line_y0 = None
                     for w in words:
-                        if code in w.get('text', '') or (is_werk and ('WERK' in w.get('text', '').upper() or 'ERSHT' in w.get('text', '').upper())):
-                            line_y0 = w['top']
-                            break
-
+                        if not is_special:
+                            if code in w.get('text', ''):
+                                line_y0 = w['top']
+                                break
+                        else:
+                            if "WERK" in w.get('text', '') or 'ERSHT' in w.get('text', ''):
+                                line_y0 = w['top']
+                                break
+                        
                     if line_y0 is not None:
                         price_box = find_price_box_near_line(actual_price, words, line_y0)
                     else:
@@ -136,6 +170,7 @@ if pdf_file and excel_file:
                     updates_per_page[i] = page_updates
 
         # Step 3: Overlay creator
+        # Step 3: Overlay creator
         def create_overlay(page_width, page_height, updates):
             packet = BytesIO()
             c = canvas.Canvas(packet, pagesize=(page_width, page_height))
@@ -149,11 +184,26 @@ if pdf_file and excel_file:
                 text_y = page_height - box['bottom'] + 1
                 c.setFillColor(black)
                 c.setFont("Helvetica-Bold", 8)
-                c.drawString(x0, text_y, new_text + ",00n")
+                
+                # Fix: Properly format the price with 2 decimal places
+                if ',' in new_text:
+                    # If it already has a comma, ensure it has 2 decimals
+                    parts = new_text.split(',')
+                    if len(parts) > 1:
+                        # Pad with zeros if needed
+                        decimal_part = parts[1].ljust(2, '0')
+                        formatted_price = f"{parts[0]},{decimal_part}"
+                    else:
+                        formatted_price = new_text + ",00"
+                else:
+                    # If no comma, add decimal part
+                    formatted_price = new_text + ",00"
+                
+                c.drawString(x0, text_y, formatted_price)  # Removed the extra ",00n"
             c.save()
             packet.seek(0)
             return PdfReader(packet)
-
+        
         # Step 4: Merge overlays
         input_pdf = PdfReader(pdf_file)
         output_pdf = PdfWriter()
